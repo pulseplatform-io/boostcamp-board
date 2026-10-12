@@ -10,7 +10,7 @@ const API = SCRIPT_URL || CSV_URL;
 const POLL_MS = 20000;
 const TZ = 'Europe/Istanbul';
 const K_SCOPE = 'bc-board-scope';
-const K_NAME = 'bc-board-name';
+const K_NAME = 'bc-board-code';
 const CONFIG = {"goal": 2500000, "days": [{"date": "2026-10-12", "label": "12 октября", "short": "12 окт", "title": "День 2 · Бизнес и возможности"}, {"date": "2026-10-13", "label": "13 октября", "short": "13 окт", "title": "День 3 · Стратегия и масштаб"}, {"date": "2026-10-14", "label": "14 октября", "short": "14 окт", "title": "День 4 · Pulse Night"}], "teams": [{"id": "sharks", "name": "Акулы", "epithet": "результата", "captain": "Сергей Каныгин", "match": ["акул", "каныгин"]}, {"id": "lions", "name": "Львы", "epithet": "лидерства", "captain": "Александр Цицорин", "match": ["льв", "лев", "цицорин"]}, {"id": "bulls", "name": "Быки", "epithet": "силы", "captain": "Юсуф Завьялов", "match": ["бык", "завьялов"]}, {"id": "whales", "name": "Киты", "epithet": "масштаба", "captain": "Сергей Поляков", "match": ["кит", "поляков"]}]};
 
 const root = document.getElementById('bc-root');
@@ -424,7 +424,7 @@ function openEditor() {
     '<div class="scrim" id="ed-scrim"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ed-title">' +
     '<div class="sh-h"><h2 id="ed-title">Внести данные</h2><button class="btn btn-sm" id="ed-x" type="button">Закрыть</button></div>' +
     '<div class="sh-b">' +
-      '<div class="field"><label for="ed-by">Кто вносит</label><input class="inp" id="ed-by" autocomplete="name" maxlength="40" placeholder="Например, Сергей · Акулы" value="' + esc(lsGet(K_NAME) || '') + '"><div class="hint">Имя попадёт в журнал изменений.</div></div>' +
+      '<div class="field"><label for="ed-code">Код доступа</label><input class="inp" id="ed-code" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" placeholder="Выдаёт Дмитрий" value="' + esc(lsGet(K_NAME) || '') + '"><div class="hint">Вносить цифры могут только владельцы кода. На этом устройстве код запомнится.</div></div>' +
       '<div class="ed-head"><div class="field"><label for="ed-goal">Цель кемпа за три дня, $</label><input class="inp num" id="ed-goal" inputmode="decimal" autocomplete="off" value="' + (isNum(ed.goal) ? nf.format(ed.goal) : '') + '"><div class="hint" id="ed-goal-h"></div></div></div>' +
       '<div class="seg" role="group" aria-label="День" id="ed-days">' + S.days.map(d => '<button type="button" data-edday="' + d.date + '" aria-pressed="' + (d.date === ed.day) + '">' + esc(d.short) + '</button>').join('') + '</div>' +
       '<div class="ed-grid" id="ed-grid">' + edRows() + '</div>' +
@@ -503,9 +503,9 @@ let saving = false;
 async function save() {
   if (saving || !ed) return;
   if (Object.keys(ed.bad).length) { setStatus('Исправьте поля с ошибкой — они подсвечены красным.', true); return; }
-  const byEl = document.getElementById('ed-by');
-  const by = (byEl ? byEl.value : '').trim().slice(0, 40);
-  if (by) lsSet(K_NAME, by);
+  const codeEl = document.getElementById('ed-code');
+  const code = (codeEl ? codeEl.value : '').trim();
+  if (!code) { setStatus('Введите код доступа — без него сохранить нельзя.', true); return; }
   const entries = [];
   for (const t of S.teams) for (const d of S.days) {
     const was = S.values[t.id][d.date], now = ed.values[t.id][d.date], e = { team_id: t.id, day: d.date };
@@ -513,7 +513,7 @@ async function save() {
     if ((was.fact ?? null) !== (now.fact ?? null)) e.fact = now.fact ?? null;
     if ('plan' in e || 'fact' in e) entries.push(e);
   }
-  const body = { by, entries };
+  const body = { code, entries };
   if (isNum(ed.goal) && ed.goal !== S.goal) body.goal = ed.goal;
   if (!entries.length && !('goal' in body)) { setStatus('Изменений нет — сохранять нечего.'); return; }
   saving = true;
@@ -523,6 +523,7 @@ async function save() {
     const r = await fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    lsSet(K_NAME, code);
     applyServer(j); loaded = true; loadErr = null; lastSync = new Date();
     ed = null; closeEditor(); renderMain();
     toast('Сохранено: ' + (entries.length ? entries.length + ' ' + plural(entries.length, 'ячейка', 'ячейки', 'ячеек') : 'цель'));
