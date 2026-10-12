@@ -228,8 +228,10 @@ textarea.inp{min-height:120px;padding:10px 14px;resize:vertical;font-size:14px;l
 </style></head><body><div id="bc-root"></div><script>(() => {
 'use strict';
 
-// Табло Boost Camp: публичная страница, данные в Supabase через функцию boostcamp-board.
-const API = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? '/api' : 'https://xyxgvqiaemvayaqypbfu.supabase.co/functions/v1/boostcamp-board';
+// Табло Boost Camp: публичная страница, цифры читаются из Google Таблицы (gviz CSV).
+const SHEET_ID = '1XX1_atKNYadO-DKkujogz7LHgYYMDnIruv8elnIqLYM';
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID + '/edit';
+const API = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID + '/gviz/tq?tqx=out:csv&headers=1';
 const POLL_MS = 20000;
 const TZ = 'Europe/Istanbul';
 const K_SCOPE = 'bc-board-scope';
@@ -401,13 +403,45 @@ async function load() {
   if (loading) return;
   loading = true;
   try {
-    const r = await fetch(API, { cache: 'no-store' });
+    const r = await fetch(API + '&_=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    applyServer(await r.json());
+    const text = await r.text();
+    if (/^\s*</.test(text)) throw new Error('таблица закрыта');
+    applyServer(fromCsv(text));
     loaded = true; loadErr = null; lastSync = new Date();
   } catch (e) { loadErr = e; }
   loading = false;
   renderMain();
+}
+function parseCsv(t) {
+  const out = []; let row = [], f = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { if (c === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; row.push(f); out.push(row); row = []; f = ''; }
+    else f += c;
+  }
+  if (f !== '' || row.length) { row.push(f); out.push(row); }
+  return out;
+}
+function sheetDay(s) {
+  const n = (String(s || '').match(/\d+/g) || []).map(Number).find(x => x >= 12 && x <= 14);
+  const d = n && S.days.find(dd => +dd.date.slice(8) === n);
+  return d ? d.date : null;
+}
+function fromCsv(text) {
+  const rows = [], j = { rows, goal: null, log: [] };
+  parseCsv(text).slice(1).forEach(c => {
+    const name = norm(c[0]);
+    if (name.includes('цель')) { const g = parseMoney(c[3]); if (isNum(g) && g > 0) j.goal = { value: g }; return; }
+    const tid = matchTeam(c[0]), day = sheetDay(c[2]);
+    if (!tid || !day) return;
+    const plan = parseMoney(c[3]), fact = parseMoney(c[4]);
+    rows.push({ team_id: tid, day, plan: Number.isNaN(plan) ? null : plan, fact: Number.isNaN(fact) ? null : fact });
+  });
+  return j;
 }
 function syncText() {
   if (!lastSync) return loadErr ? 'нет связи с базой' : 'загружаю…';
@@ -424,19 +458,19 @@ function renderMain() {
   h += '<header class="top"><span class="logo" role="img" aria-label="Pulse Platform"></span><div class="top-r"><span class="crumb">Boost Camp · Кемер</span>' +
     '<span class="sync' + (loadErr ? ' bad' : '') + '" role="status">' + esc(syncText()) + '</span>' +
     '<button class="btn btn-sm" id="b-sync" type="button">Обновить</button>' +
-    '<button class="btn btn-o btn-sm" id="b-edit" type="button"' + (loaded ? '' : ' disabled') + '>Внести данные</button></div></header>';
+    '<a class="btn btn-o btn-sm" href="' + SHEET_URL + '" target="_blank" rel="noopener">Внести данные</a></div></header>';
 
-  if (loadErr && !loaded) h += '<div class="banner" role="alert"><span>Не получилось загрузить цифры. Проверьте интернет и нажмите «Обновить».</span></div>';
+  if (loadErr && !loaded) h += '<div class="banner" role="alert"><span>Не получилось загрузить цифры из таблицы. Проверьте интернет и нажмите «Обновить». Если не помогает — у таблицы не открыт доступ по ссылке.</span></div>';
   else if (loadErr) h += '<div class="banner" role="alert"><span>Связь с базой пропала. На экране последние загруженные цифры, табло обновится само.</span></div>';
-  else if (loaded && !hasAnyData()) h += '<div class="banner" role="status"><span>Данных пока нет. Нажмите «Внести данные», чтобы добавить план и факт команд.</span><button class="btn btn-o btn-sm" id="b-edit-2" type="button">Внести данные</button></div>';
+  else if (loaded && !hasAnyData()) h += '<div class="banner" role="status"><span>Данных пока нет. Нажмите «Внести данные» — откроется таблица, впишите план и факт в строки команд.</span><a class="btn btn-o btn-sm" href="' + SHEET_URL + '" target="_blank" rel="noopener">Открыть таблицу</a></div>';
 
   h += '<section class="head"><div><h1>План и факт команд</h1><p>12–14 октября · четыре команды · суммы в долларах</p></div>' +
     '<div class="seg" role="group" aria-label="Период">' + segs.map(([k, l]) => '<button type="button" data-scope="' + k + '" aria-pressed="' + (scope === k) + '">' + esc(l) + (k === t ? '<span class="dot" title="сегодня"></span>' : '') + '</button>').join('') + '</div></section>';
 
-  h += heroHtml() + kpiHtml() + teamsHtml() + daysHtml() + tableHtml() + logHtml();
+  h += heroHtml() + kpiHtml() + teamsHtml() + daysHtml() + tableHtml();
 
   h += '<footer class="foot"><span>Цель <b>' + money(S.goal) + '</b> — слайд «Цель этого Boost Camp» из презентации BOOSTCAMP_1_GO от 11 октября.</span>' +
-    '<span>План и факт вносят организаторы и капитаны. Последнее изменение: <b>' + esc(stamp(S.updatedAt)) + '</b>' + (S.updatedBy ? ', ' + esc(S.updatedBy) : '') + '.</span>' +
+    '<span>План и факт вносят организаторы и капитаны в <a href="' + SHEET_URL + '" target="_blank" rel="noopener" style="color:var(--fg-2)">Google Таблицу</a>. История правок — в самой таблице: Файл → История версий.</span>' +
     '<span>Табло обновляется само каждые 20 секунд.</span></footer>';
   h += '</div>';
   root.innerHTML = h;
@@ -733,7 +767,7 @@ function toast(msg) {
   scope = (saved && (saved === 'all' || dayOf(saved))) ? saved : (dayOf(t) ? t : 'all');
   renderMain();
   load();
-  setInterval(() => { if (!document.hidden && !document.getElementById('bc-editor')) load(); }, POLL_MS);
+  setInterval(() => { if (!document.hidden) load(); }, POLL_MS);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 })();
 })();
